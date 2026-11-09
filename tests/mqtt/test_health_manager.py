@@ -263,3 +263,54 @@ async def test_diagnostics_for_device_without_requests() -> None:
         "session_restarts": 0,
         "session_last_restart": None,
     }
+
+
+async def test_device_cooldown_applies_without_successes_from_other_devices() -> None:
+    """Test that a failing device keeps its cooldown when other devices report nothing in between."""
+    restart = AsyncMock()
+    health_manager = HealthManager(restart=restart)
+    failing = DeviceHealthManager(health_manager, "failing")
+    working = DeviceHealthManager(health_manager, "working")
+
+    with patch("roborock.mqtt.health_manager.datetime") as mock_datetime:
+        now = datetime.datetime(2023, 1, 1, 12, 0, 0)
+        mock_datetime.datetime.now.return_value = now
+        await working.on_success()
+
+        for _ in range(3):
+            await failing.on_timeout()
+        restart.assert_called_once()
+        restart.reset_mock()
+
+        # Past the session cooldown, but only this device is failing.
+        mock_datetime.datetime.now.return_value = now + datetime.timedelta(hours=1)
+        for _ in range(3):
+            await failing.on_timeout()
+        restart.assert_not_called()
+
+
+async def test_timeouts_from_several_devices_bypass_device_cooldown() -> None:
+    """Test that a session failing for several devices restarts during one device's cooldown."""
+    restart = AsyncMock()
+    health_manager = HealthManager(restart=restart)
+    first = DeviceHealthManager(health_manager, "first")
+    second = DeviceHealthManager(health_manager, "second")
+
+    with patch("roborock.mqtt.health_manager.datetime") as mock_datetime:
+        now = datetime.datetime(2023, 1, 1, 12, 0, 0)
+        mock_datetime.datetime.now.return_value = now
+        await second.on_success()
+
+        for _ in range(3):
+            await first.on_timeout()
+        restart.assert_called_once()
+        restart.reset_mock()
+
+        # The second device is failing too, so the session is restarted again.
+        mock_datetime.datetime.now.return_value = now + datetime.timedelta(hours=1)
+        await first.on_timeout()
+        await second.on_timeout()
+        restart.assert_not_called()
+
+        await first.on_timeout()
+        restart.assert_called_once()

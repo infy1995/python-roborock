@@ -64,6 +64,7 @@ class HealthManager:
             restart: A callable to restart the MQTT session.
         """
         self._consecutive_timeouts = 0
+        self._timed_out_devices: set[str] = set()
         self._devices: dict[str, _DeviceHealth] = {}
         self._restart = restart
         self._last_restart: datetime.datetime | None = None
@@ -76,6 +77,7 @@ class HealthManager:
     async def on_success(self, device_id: str) -> None:
         """Record a successful communication event for a device."""
         self._consecutive_timeouts = 0
+        self._timed_out_devices.clear()
         device = self._device(device_id)
         device.consecutive_timeouts = 0
         device.restart_cooldown_start = None
@@ -90,12 +92,16 @@ class HealthManager:
         """
         now = datetime.datetime.now(datetime.UTC)
         self._consecutive_timeouts += 1
+        self._timed_out_devices.add(device_id)
         device = self._device(device_id)
         device.consecutive_timeouts += 1
         device.timeouts += 1
         device.last_timeout = now
 
-        session_unhealthy = self._consecutive_timeouts >= TIMEOUT_THRESHOLD
+        # Timeouts from one device only implicate the session if it is the only device we know about.
+        session_unhealthy = self._consecutive_timeouts >= TIMEOUT_THRESHOLD and (
+            len(self._timed_out_devices) > 1 or len(self._devices) == 1
+        )
         if not session_unhealthy and device.consecutive_timeouts < TIMEOUT_THRESHOLD:
             return
 
@@ -121,6 +127,7 @@ class HealthManager:
         self._restarts += 1
         device.restarts_triggered += 1
         self._consecutive_timeouts = 0
+        self._timed_out_devices.clear()
         for tracked_device in self._devices.values():
             tracked_device.consecutive_timeouts = 0
 
