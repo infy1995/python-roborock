@@ -35,6 +35,16 @@
           'timeZoneId': 'America/Los_Angeles',
           'tuyaMigrated': False,
         }),
+        'mqtt_health': dict({
+          'consecutive_timeouts': 0,
+          'last_success': None,
+          'last_timeout': None,
+          'restarts_triggered': 0,
+          'session_last_restart': None,
+          'session_restarts': 0,
+          'successes': 0,
+          'timeouts': 0,
+        }),
         'product': dict({
           'capability': 0,
           'category': 'robot.vacuum.cleaner',
