@@ -327,97 +327,34 @@ async def test_diagnostics_record_recovery_after_restart() -> None:
     assert device.diagnostic_data()["failing_since"] is None
 
 
-async def test_failing_device_is_resubscribed_before_restart() -> None:
-    """Test that a single failing device first gets its topic subscribed again."""
-    restart = AsyncMock()
-    resubscribe = AsyncMock()
-    health_manager = HealthManager(restart=restart)
-    failing = DeviceHealthManager(health_manager, "failing", resubscribe)
-    working = DeviceHealthManager(health_manager, "working")
-
-    for _ in range(3):
-        await working.on_success()
-        await failing.on_timeout()
-    resubscribe.assert_awaited_once()
-    restart.assert_not_called()
-
-    # Subscribing again did not help, so the session is restarted.
-    for _ in range(3):
-        await working.on_success()
-        await failing.on_timeout()
-    resubscribe.assert_awaited_once()
-    restart.assert_called_once()
-
-    assert [event["event"] for event in failing.diagnostic_data()["events"]] == [
-        "session_restart",
-        "resubscribe",
-        "timeouts_started",
-    ]
-
-
-async def test_resubscribe_is_tried_again_after_recovery() -> None:
-    """Test that a device that recovered gets its topic subscribed again if it fails later."""
-    restart = AsyncMock()
-    resubscribe = AsyncMock()
-    health_manager = HealthManager(restart=restart)
-    failing = DeviceHealthManager(health_manager, "failing", resubscribe)
-    working = DeviceHealthManager(health_manager, "working")
-
-    for _ in range(3):
-        await working.on_success()
-        await failing.on_timeout()
-    await failing.on_success()
-
-    for _ in range(3):
-        await working.on_success()
-        await failing.on_timeout()
-
-    assert resubscribe.await_count == 2
-    restart.assert_not_called()
-    assert [event["event"] for event in failing.diagnostic_data()["events"]] == [
-        "resubscribe",
-        "timeouts_started",
-        "recovered",
-        "resubscribe",
-        "timeouts_started",
-    ]
-
-
 async def test_health_changes_are_logged(caplog: pytest.LogCaptureFixture) -> None:
     """Test that every decision about a failing device is visible in the info log."""
     caplog.set_level(logging.INFO, logger="roborock.mqtt.health_manager")
     health_manager = HealthManager(restart=AsyncMock())
-    failing = DeviceHealthManager(health_manager, "failing", AsyncMock())
+    failing = DeviceHealthManager(health_manager, "failing")
     working = DeviceHealthManager(health_manager, "working")
 
-    for _ in range(6):
+    for _ in range(3):
         await working.on_success()
         await failing.on_timeout()
     await failing.on_success()
 
     messages = [record.getMessage() for record in caplog.records]
-    assert [message.split(" ")[0] for message in messages] == ["Device", "Device", "Restarting", "Device"]
+    assert [message.split(" ")[0] for message in messages] == ["Device", "Restarting", "Device"]
     assert "started timing out over MQTT" in messages[0]
-    assert "subscribing to its topic again" in messages[1]
-    assert "may restart the session again in 0:30:00" in messages[2]
-    assert "(last restart: never)" in messages[2]
-    assert "responds over MQTT again" in messages[3]
+    assert "may restart the session again in 0:30:00" in messages[1]
+    assert "(last restart: never)" in messages[1]
+    assert "responds over MQTT again" in messages[2]
 
 
 async def test_only_known_device_is_paced_like_any_failing_device() -> None:
-    """Test that the only device of a session is resubscribed first and its restarts become rarer."""
+    """Test that the restarts triggered by the only device of a session become rarer."""
     restart = AsyncMock()
-    resubscribe = AsyncMock()
-    device = DeviceHealthManager(HealthManager(restart=restart), DEVICE_ID, resubscribe)
+    device = DeviceHealthManager(HealthManager(restart=restart), DEVICE_ID)
 
     with patch("roborock.mqtt.health_manager.datetime") as mock_datetime:
         now = datetime.datetime(2023, 1, 1, 12, 0, 0)
         mock_datetime.datetime.now.return_value = now
-        for _ in range(3):
-            await device.on_timeout()
-        resubscribe.assert_awaited_once()
-        restart.assert_not_called()
-
         for _ in range(3):
             await device.on_timeout()
         restart.assert_called_once()
@@ -437,45 +374,46 @@ async def test_only_known_device_is_paced_like_any_failing_device() -> None:
         restart.assert_not_called()
 
 
-async def test_concurrent_timeouts_resubscribe_once() -> None:
-    """Test that timeouts arriving while the topic is being subscribed again don't repeat it."""
-    resubscribed = asyncio.Event()
+async def test_concurrent_timeouts_restart_once() -> None:
+    """Test that timeouts arriving while the session is restarting don't restart it again."""
+    restarted = asyncio.Event()
     calls = 0
 
-    async def slow_resubscribe() -> None:
+    async def slow_restart() -> None:
         nonlocal calls
         calls += 1
-        await resubscribed.wait()
+        await restarted.wait()
 
-    health_manager = HealthManager(restart=AsyncMock())
-    failing = DeviceHealthManager(health_manager, "failing", slow_resubscribe)
+    health_manager = HealthManager(restart=slow_restart)
+    failing = DeviceHealthManager(health_manager, "failing")
     await DeviceHealthManager(health_manager, "working").on_success()
 
     await failing.on_timeout()
     await failing.on_timeout()
-    pending = [asyncio.create_task(failing.on_timeout()) for _ in range(3)]
+    pending = [asyncio.create_task(failing.on_timeout()) for _ in range(5)]
     await asyncio.sleep(0)
-    resubscribed.set()
+    restarted.set()
     await asyncio.gather(*pending)
 
     assert calls == 1
-    assert [event["event"] for event in failing.diagnostic_data()["events"]] == ["resubscribe", "timeouts_started"]
+    assert [event["event"] for event in failing.diagnostic_data()["events"]] == [
+        "session_restart",
+        "timeouts_started",
+    ]
 
 
-async def test_session_failure_restarts_without_resubscribing() -> None:
-    """Test that timeouts across devices restart the session straight away."""
+async def test_session_failure_is_recorded_on_every_device() -> None:
+    """Test that a restart caused by several devices names them all as the cause."""
     restart = AsyncMock()
-    resubscribe = AsyncMock()
     health_manager = HealthManager(restart=restart)
-    first = DeviceHealthManager(health_manager, "first", resubscribe)
-    second = DeviceHealthManager(health_manager, "second", resubscribe)
+    first = DeviceHealthManager(health_manager, "first")
+    second = DeviceHealthManager(health_manager, "second")
 
     await first.on_timeout()
     await second.on_timeout()
     await first.on_timeout()
 
     restart.assert_called_once()
-    resubscribe.assert_not_called()
     for device in (first, second):
         assert device.diagnostic_data()["events"][0]["cause"] == "several_devices"
 

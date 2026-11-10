@@ -47,7 +47,7 @@ class MqttChannel(Channel):
     @property
     def health_manager(self) -> DeviceHealthManager:
         """Return the health manager that reports this device's events to the session."""
-        return DeviceHealthManager(self._mqtt_session.health_manager, self._duid, self._resubscribe)
+        return DeviceHealthManager(self._mqtt_session.health_manager, self._duid)
 
     @property
     def is_local_connected(self) -> bool:
@@ -109,10 +109,6 @@ class MqttChannel(Channel):
         except MqttSessionException as e:
             self._logger.debug("Error publishing MQTT message: %s", e)
             raise RoborockException(f"Failed to publish MQTT message: {e}") from e
-
-    async def _resubscribe(self) -> None:
-        """Subscribe to the device's response topic again."""
-        await self._mqtt_session.resubscribe(self._subscribe_topic)
 
     async def restart(self) -> None:
         """Restart the underlying MQTT session."""

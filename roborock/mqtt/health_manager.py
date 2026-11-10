@@ -6,9 +6,9 @@ and restart the connection if too many timeouts occur in succession.
 
 The broker can also stop delivering messages for a single device's topic while
 the rest of the session keeps working, so timeouts are tracked both for the
-session as a whole and for each device. When only one device is failing, its
-topic is subscribed again first, and the session is only restarted if that
-does not help.
+session as a whole and for each device. Subscribing to the device's topic again
+on the same connection does not bring the messages back; only a new connection
+does, so the session is restarted.
 """
 
 import datetime
@@ -43,7 +43,6 @@ class _DeviceHealth:
 
     consecutive_timeouts: int = 0
     failing_since: datetime.datetime | None = None
-    resubscribed: bool = False
     restart_cooldown_start: datetime.datetime | None = None
     restart_cooldown: datetime.timedelta | None = None
     timeouts: int = 0
@@ -101,21 +100,16 @@ class HealthManager:
             device.add_event(now, "recovered")
         device.consecutive_timeouts = 0
         device.failing_since = None
-        device.resubscribed = False
         device.restart_cooldown_start = None
         device.restart_cooldown = None
         device.successes += 1
         device.last_success = now
 
-    async def on_timeout(self, device_id: str, resubscribe: Callable[[], Awaitable[None]] | None = None) -> None:
+    async def on_timeout(self, device_id: str) -> None:
         """Record a timeout event for a device.
 
-        This may subscribe to the device's topic again or restart the MQTT
-        session if too many timeouts have occurred in succession.
-
-        Args:
-            device_id: The device whose request timed out.
-            resubscribe: A callable to subscribe to the device's topic again.
+        This may trigger a restart of the MQTT session if too many timeouts
+        have occurred in succession.
         """
         now = datetime.datetime.now(datetime.UTC)
         self._consecutive_timeouts += 1
@@ -134,19 +128,6 @@ class HealthManager:
         # may just be offline, even when it is the only device reporting to this session.
         session_unhealthy = self._consecutive_timeouts >= TIMEOUT_THRESHOLD and len(self._timed_out_devices) > 1
         if not session_unhealthy and device.consecutive_timeouts < TIMEOUT_THRESHOLD:
-            return
-
-        if not session_unhealthy and resubscribe is not None and not device.resubscribed:
-            _LOGGER.info(
-                "Device %s timed out %d times in a row over MQTT, subscribing to its topic again",
-                device_name,
-                device.consecutive_timeouts,
-            )
-            # Update the state before awaiting, so timeouts arriving meanwhile don't subscribe again.
-            device.resubscribed = True
-            device.consecutive_timeouts = 0
-            device.add_event(now, "resubscribe")
-            await resubscribe()
             return
 
         since_last = (now - self._last_restart) if self._last_restart else None
@@ -178,7 +159,7 @@ class HealthManager:
             reason,
             f"{since_last} ago" if since_last is not None else "never",
         )
-        await self._restart()
+        # Update the state before awaiting, so timeouts arriving meanwhile don't restart again.
         self._last_restart = now
         # The restart affects every device, so each one records it along with what caused it.
         several_devices = len(self._timed_out_devices) > 1
@@ -191,6 +172,7 @@ class HealthManager:
             tracked_device.consecutive_timeouts = 0
         self._consecutive_timeouts = 0
         self._timed_out_devices.clear()
+        await self._restart()
 
     def device_diagnostic_data(self, device_id: str) -> dict[str, Any]:
         """Return diagnostics about a device's MQTT requests."""
@@ -209,22 +191,10 @@ class HealthManager:
 class DeviceHealthManager:
     """Reports the outcome of a single device's MQTT requests to the session's health manager."""
 
-    def __init__(
-        self,
-        health_manager: HealthManager,
-        device_id: str,
-        resubscribe: Callable[[], Awaitable[None]] | None = None,
-    ) -> None:
-        """Initialize the device health manager.
-
-        Args:
-            health_manager: The health manager of the session.
-            device_id: The device whose requests are reported.
-            resubscribe: A callable to subscribe to the device's topic again.
-        """
+    def __init__(self, health_manager: HealthManager, device_id: str) -> None:
+        """Initialize the device health manager."""
         self._health_manager = health_manager
         self._device_id = device_id
-        self._resubscribe = resubscribe
 
     async def on_success(self) -> None:
         """Record a successful communication event."""
@@ -232,7 +202,7 @@ class DeviceHealthManager:
 
     async def on_timeout(self) -> None:
         """Record a timeout event."""
-        await self._health_manager.on_timeout(self._device_id, self._resubscribe)
+        await self._health_manager.on_timeout(self._device_id)
 
     def diagnostic_data(self) -> dict[str, Any]:
         """Return diagnostics about this device's MQTT requests."""

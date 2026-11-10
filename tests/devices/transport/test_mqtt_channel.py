@@ -283,15 +283,7 @@ async def test_health_is_tracked_per_device(mqtt_session: Mock) -> None:
     )
 
     for _ in range(3):
-        mqtt_session.resubscribe.assert_not_called()
-        await working.health_manager.on_success()
-        await failing.health_manager.on_timeout()
-
-    # Only the failing device's topic is subscribed again at first.
-    mqtt_session.resubscribe.assert_awaited_once_with(f"rr/m/o/{USER_DATA.rriot.u}/username/failing")
-    restart.assert_not_called()
-
-    for _ in range(3):
+        restart.assert_not_called()
         await working.health_manager.on_success()
         await failing.health_manager.on_timeout()
 
