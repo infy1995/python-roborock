@@ -37,6 +37,8 @@
         }),
         'mqtt_health': dict({
           'consecutive_timeouts': 0,
+          'events': list([
+          ]),
           'last_success': None,
           'last_timeout': None,
           'restarts_triggered': 0,

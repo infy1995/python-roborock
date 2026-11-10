@@ -11,8 +11,9 @@ session as a whole and for each device.
 
 import datetime
 import logging
+from collections import deque
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from roborock.diagnostics import redact_device_uid
@@ -30,6 +31,9 @@ RESTART_COOLDOWN = datetime.timedelta(minutes=30)
 # the session more often than this interval.
 DEVICE_RESTART_COOLDOWN = datetime.timedelta(hours=6)
 
+# Number of health changes kept per device for diagnostics.
+MAX_DEVICE_EVENTS = 20
+
 
 @dataclass
 class _DeviceHealth:
@@ -42,6 +46,7 @@ class _DeviceHealth:
     restarts_triggered: int = 0
     last_success: datetime.datetime | None = None
     last_timeout: datetime.datetime | None = None
+    events: deque[tuple[datetime.datetime, str]] = field(default_factory=lambda: deque(maxlen=MAX_DEVICE_EVENTS))
 
 
 def _isoformat(value: datetime.datetime | None) -> str | None:
@@ -79,10 +84,13 @@ class HealthManager:
         self._consecutive_timeouts = 0
         self._timed_out_devices.clear()
         device = self._device(device_id)
+        now = datetime.datetime.now(datetime.UTC)
+        if device.consecutive_timeouts:
+            device.events.append((now, "recovered"))
         device.consecutive_timeouts = 0
         device.restart_cooldown_start = None
         device.successes += 1
-        device.last_success = datetime.datetime.now(datetime.UTC)
+        device.last_success = now
 
     async def on_timeout(self, device_id: str) -> None:
         """Record a timeout event for a device.
@@ -94,6 +102,8 @@ class HealthManager:
         self._consecutive_timeouts += 1
         self._timed_out_devices.add(device_id)
         device = self._device(device_id)
+        if not device.consecutive_timeouts:
+            device.events.append((now, "timeouts_started"))
         device.consecutive_timeouts += 1
         device.timeouts += 1
         device.last_timeout = now
@@ -126,6 +136,7 @@ class HealthManager:
         self._last_restart = now
         self._restarts += 1
         device.restarts_triggered += 1
+        device.events.append((now, "session_restart"))
         self._consecutive_timeouts = 0
         self._timed_out_devices.clear()
         for tracked_device in self._devices.values():
@@ -143,6 +154,7 @@ class HealthManager:
             "last_timeout": _isoformat(device.last_timeout),
             "session_restarts": self._restarts,
             "session_last_restart": _isoformat(self._last_restart),
+            "events": [{"time": _isoformat(time), "event": event} for time, event in device.events],
         }
 
 
