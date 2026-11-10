@@ -291,7 +291,10 @@ async def create_device_manager(
                     f"Device {device.name} has unsupported version {device.pv} {product.model}"
                 )
 
-        mqtt_health = DeviceHealthManager(mqtt_session.health_manager, device.duid)
+        # B01 channels don't report their MQTT requests to the health manager yet.
+        mqtt_health = (
+            DeviceHealthManager(mqtt_session.health_manager, device.duid) if device.pv != DeviceVersion.B01 else None
+        )
         dev = RoborockDevice(device, product, channel, trait, mqtt_health)
         if ready_callback:
             dev.add_ready_callback(ready_callback)

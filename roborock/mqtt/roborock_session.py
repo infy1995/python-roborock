@@ -361,6 +361,26 @@ class RoborockMqttSession(MqttSession):
 
         return delayed_unsub
 
+    async def resubscribe(self, topic: str) -> None:
+        """Subscribe to an already subscribed topic again without reconnecting.
+
+        The broker can stop delivering messages for a topic while the rest of the
+        connection keeps working. Unsubscribing and subscribing again asks it to
+        set up the subscription from scratch, without interrupting other topics.
+        """
+        async with self._client_lock:
+            if topic not in self._client_subscribed_topics or self._client is None:
+                _LOGGER.debug("Not subscribing again to topic %s, it is not active", redact_topic_name(topic))
+                return
+            _LOGGER.info("Subscribing again to topic %s", redact_topic_name(topic))
+            self._diagnostics.increment("resubscribe_topic")
+            try:
+                await self._client.unsubscribe(topic)
+                await self._client.subscribe(topic)
+            except MqttError as err:
+                self._diagnostics.increment("resubscribe_topic_failure")
+                _LOGGER.warning("Error subscribing again to topic %s: %s", redact_topic_name(topic), err)
+
     async def publish(self, topic: str, message: bytes, qos: MqttQos = MqttQos.AT_MOST_ONCE) -> None:
         """Publish a message on the topic.
 
@@ -438,6 +458,10 @@ class LazyMqttSession(MqttSession):
         restarted again.
         """
         await self._session.close()
+
+    async def resubscribe(self, topic: str) -> None:
+        """Subscribe to an already subscribed topic again without reconnecting."""
+        await self._session.resubscribe(topic)
 
     async def restart(self) -> None:
         """Force the session to disconnect and reconnect."""

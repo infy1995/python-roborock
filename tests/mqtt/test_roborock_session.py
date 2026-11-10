@@ -240,6 +240,47 @@ async def test_restart(push_mqtt_response: Callable[[bytes], None]) -> None:
     await session.close()
 
 
+async def test_resubscribe_topic(mqtt_client_lite: AsyncMock) -> None:
+    """Test subscribing again to one topic without touching the others."""
+    session = await create_mqtt_session(FAKE_PARAMS)
+    await session.subscribe("topic-1", Subscriber().append)
+    await session.subscribe("topic-2", Subscriber().append)
+    mqtt_client_lite.subscribe.reset_mock()
+
+    await session.resubscribe("topic-1")
+
+    mqtt_client_lite.unsubscribe.assert_awaited_once_with("topic-1")
+    mqtt_client_lite.subscribe.assert_awaited_once_with("topic-1")
+    assert session.connected
+
+    await session.close()
+
+
+async def test_resubscribe_unknown_topic(mqtt_client_lite: AsyncMock) -> None:
+    """Test that a topic that is not subscribed is left alone."""
+    session = await create_mqtt_session(FAKE_PARAMS)
+
+    await session.resubscribe("topic-1")
+
+    mqtt_client_lite.unsubscribe.assert_not_called()
+    mqtt_client_lite.subscribe.assert_not_called()
+
+    await session.close()
+
+
+async def test_resubscribe_failure_is_logged(mqtt_client_lite: AsyncMock, caplog: pytest.LogCaptureFixture) -> None:
+    """Test that an error while subscribing again does not raise."""
+    session = await create_mqtt_session(FAKE_PARAMS)
+    await session.subscribe("topic-1", Subscriber().append)
+    mqtt_client_lite.subscribe.side_effect = aiomqtt.MqttError("broker gone")
+
+    await session.resubscribe("topic-1")
+
+    assert "Error subscribing again to topic" in caplog.text
+
+    await session.close()
+
+
 async def test_idle_timeout_resubscribe(mqtt_client_lite: AsyncMock) -> None:
     """Test that resubscribing before idle timeout cancels the unsubscribe."""
 

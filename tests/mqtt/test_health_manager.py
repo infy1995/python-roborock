@@ -1,9 +1,18 @@
 """Tests for the health manager."""
 
+import asyncio
 import datetime
+import logging
 from unittest.mock import AsyncMock, patch
 
-from roborock.mqtt.health_manager import MAX_DEVICE_EVENTS, DeviceHealthManager, HealthManager
+import pytest
+
+from roborock.mqtt.health_manager import (
+    MAX_DEVICE_EVENTS,
+    MAX_DEVICE_RESTART_COOLDOWN,
+    DeviceHealthManager,
+    HealthManager,
+)
 
 DEVICE_ID = "device-1"
 
@@ -150,8 +159,8 @@ async def test_restart_clears_counters_of_all_devices() -> None:
         restart.assert_not_called()
 
 
-async def test_single_failing_device_has_longer_cooldown() -> None:
-    """Test that a device that stays unreachable does not keep restarting a working session."""
+async def test_single_failing_device_cooldown_grows() -> None:
+    """Test that a device that stays unreachable restarts a working session less and less often."""
     restart = AsyncMock()
     health_manager = HealthManager(restart=restart)
     failing = DeviceHealthManager(health_manager, "failing")
@@ -165,20 +174,28 @@ async def test_single_failing_device_has_longer_cooldown() -> None:
     with patch("roborock.mqtt.health_manager.datetime") as mock_datetime:
         now = datetime.datetime(2023, 1, 1, 12, 0, 0)
         mock_datetime.datetime.now.return_value = now
-
         await time_out_while_session_works()
         restart.assert_called_once()
-        restart.reset_mock()
 
-        # Past the session cooldown, but this device already had its restart.
-        mock_datetime.datetime.now.return_value = now + datetime.timedelta(hours=1)
-        await time_out_while_session_works()
-        restart.assert_not_called()
+        # The interval between restarts doubles from the session cooldown up to the maximum.
+        hours = datetime.timedelta(hours=1)
+        for cooldown in (
+            hours / 2,
+            hours,
+            2 * hours,
+            4 * hours,
+            MAX_DEVICE_RESTART_COOLDOWN,
+            MAX_DEVICE_RESTART_COOLDOWN,
+        ):
+            restart.reset_mock()
+            mock_datetime.datetime.now.return_value = now + cooldown - datetime.timedelta(minutes=1)
+            await time_out_while_session_works()
+            restart.assert_not_called()
 
-        # Past the device cooldown the session is restarted again.
-        mock_datetime.datetime.now.return_value = now + datetime.timedelta(hours=6, minutes=1)
-        await time_out_while_session_works()
-        restart.assert_called_once()
+            now += cooldown
+            mock_datetime.datetime.now.return_value = now
+            await time_out_while_session_works()
+            restart.assert_called_once()
 
 
 async def test_device_success_clears_device_cooldown() -> None:
@@ -228,30 +245,25 @@ async def test_device_diagnostics_are_separate_per_device() -> None:
 
     last_timeout = "2023-01-01T13:00:00+00:00"
     assert failing.diagnostic_data() == {
-        "timeouts": 4,
-        "successes": 1,
-        "consecutive_timeouts": 1,
-        "restarts_triggered": 1,
+        "failing_since": last_timeout,
         "last_success": "2023-01-01T12:00:00+00:00",
         "last_timeout": last_timeout,
-        "session_restarts": 1,
-        "session_last_restart": last_timeout,
+        "successes": 1,
+        "timeouts": 4,
         "events": [
-            {"time": last_timeout, "event": "timeouts_started"},
-            {"time": last_timeout, "event": "session_restart"},
+            {"time": last_timeout, "event": "session_restart", "cause": "this_device"},
             {"time": last_timeout, "event": "timeouts_started"},
         ],
     }
     assert working.diagnostic_data() == {
-        "timeouts": 0,
-        "successes": 4,
-        "consecutive_timeouts": 0,
-        "restarts_triggered": 0,
+        "failing_since": None,
         "last_success": last_timeout,
         "last_timeout": None,
-        "session_restarts": 1,
-        "session_last_restart": last_timeout,
-        "events": [],
+        "successes": 4,
+        "timeouts": 0,
+        "events": [
+            {"time": last_timeout, "event": "session_restart", "cause": "other_device"},
+        ],
     }
 
 
@@ -260,14 +272,11 @@ async def test_diagnostics_for_device_without_requests() -> None:
     device = DeviceHealthManager(HealthManager(restart=AsyncMock()), DEVICE_ID)
 
     assert device.diagnostic_data() == {
-        "timeouts": 0,
-        "successes": 0,
-        "consecutive_timeouts": 0,
-        "restarts_triggered": 0,
+        "failing_since": None,
         "last_success": None,
         "last_timeout": None,
-        "session_restarts": 0,
-        "session_last_restart": None,
+        "successes": 0,
+        "timeouts": 0,
         "events": [],
     }
 
@@ -289,9 +298,186 @@ async def test_diagnostics_record_when_timeouts_start_and_recover() -> None:
         await device.on_success()
 
     assert device.diagnostic_data()["events"] == [
-        {"time": start.isoformat(), "event": "timeouts_started"},
         {"time": recovered.isoformat(), "event": "recovered"},
+        {"time": start.isoformat(), "event": "timeouts_started"},
     ]
+
+
+async def test_diagnostics_record_recovery_after_restart() -> None:
+    """Test that a device that recovers after a session restart is recorded as recovered."""
+    restart = AsyncMock()
+    device = DeviceHealthManager(HealthManager(restart=restart), DEVICE_ID)
+
+    with patch("roborock.mqtt.health_manager.datetime") as mock_datetime:
+        start = datetime.datetime(2023, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
+        mock_datetime.datetime.now.return_value = start
+        for _ in range(3):
+            await device.on_timeout()
+        restart.assert_called_once()
+
+        recovered = start + datetime.timedelta(minutes=10)
+        mock_datetime.datetime.now.return_value = recovered
+        await device.on_success()
+
+    assert device.diagnostic_data()["events"] == [
+        {"time": recovered.isoformat(), "event": "recovered"},
+        {"time": start.isoformat(), "event": "session_restart", "cause": "this_device"},
+        {"time": start.isoformat(), "event": "timeouts_started"},
+    ]
+    assert device.diagnostic_data()["failing_since"] is None
+
+
+async def test_failing_device_is_resubscribed_before_restart() -> None:
+    """Test that a single failing device first gets its topic subscribed again."""
+    restart = AsyncMock()
+    resubscribe = AsyncMock()
+    health_manager = HealthManager(restart=restart)
+    failing = DeviceHealthManager(health_manager, "failing", resubscribe)
+    working = DeviceHealthManager(health_manager, "working")
+
+    for _ in range(3):
+        await working.on_success()
+        await failing.on_timeout()
+    resubscribe.assert_awaited_once()
+    restart.assert_not_called()
+
+    # Subscribing again did not help, so the session is restarted.
+    for _ in range(3):
+        await working.on_success()
+        await failing.on_timeout()
+    resubscribe.assert_awaited_once()
+    restart.assert_called_once()
+
+    assert [event["event"] for event in failing.diagnostic_data()["events"]] == [
+        "session_restart",
+        "resubscribe",
+        "timeouts_started",
+    ]
+
+
+async def test_resubscribe_is_tried_again_after_recovery() -> None:
+    """Test that a device that recovered gets its topic subscribed again if it fails later."""
+    restart = AsyncMock()
+    resubscribe = AsyncMock()
+    health_manager = HealthManager(restart=restart)
+    failing = DeviceHealthManager(health_manager, "failing", resubscribe)
+    working = DeviceHealthManager(health_manager, "working")
+
+    for _ in range(3):
+        await working.on_success()
+        await failing.on_timeout()
+    await failing.on_success()
+
+    for _ in range(3):
+        await working.on_success()
+        await failing.on_timeout()
+
+    assert resubscribe.await_count == 2
+    restart.assert_not_called()
+    assert [event["event"] for event in failing.diagnostic_data()["events"]] == [
+        "resubscribe",
+        "timeouts_started",
+        "recovered",
+        "resubscribe",
+        "timeouts_started",
+    ]
+
+
+async def test_health_changes_are_logged(caplog: pytest.LogCaptureFixture) -> None:
+    """Test that every decision about a failing device is visible in the info log."""
+    caplog.set_level(logging.INFO, logger="roborock.mqtt.health_manager")
+    health_manager = HealthManager(restart=AsyncMock())
+    failing = DeviceHealthManager(health_manager, "failing", AsyncMock())
+    working = DeviceHealthManager(health_manager, "working")
+
+    for _ in range(6):
+        await working.on_success()
+        await failing.on_timeout()
+    await failing.on_success()
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert [message.split(" ")[0] for message in messages] == ["Device", "Device", "Restarting", "Device"]
+    assert "started timing out over MQTT" in messages[0]
+    assert "subscribing to its topic again" in messages[1]
+    assert "may restart the session again in 0:30:00" in messages[2]
+    assert "(last restart: never)" in messages[2]
+    assert "responds over MQTT again" in messages[3]
+
+
+async def test_only_known_device_is_paced_like_any_failing_device() -> None:
+    """Test that the only device of a session is resubscribed first and its restarts become rarer."""
+    restart = AsyncMock()
+    resubscribe = AsyncMock()
+    device = DeviceHealthManager(HealthManager(restart=restart), DEVICE_ID, resubscribe)
+
+    with patch("roborock.mqtt.health_manager.datetime") as mock_datetime:
+        now = datetime.datetime(2023, 1, 1, 12, 0, 0)
+        mock_datetime.datetime.now.return_value = now
+        for _ in range(3):
+            await device.on_timeout()
+        resubscribe.assert_awaited_once()
+        restart.assert_not_called()
+
+        for _ in range(3):
+            await device.on_timeout()
+        restart.assert_called_once()
+        restart.reset_mock()
+
+        # The second restart is allowed after 30 minutes, the third only after another hour.
+        now += datetime.timedelta(minutes=31)
+        mock_datetime.datetime.now.return_value = now
+        for _ in range(3):
+            await device.on_timeout()
+        restart.assert_called_once()
+        restart.reset_mock()
+
+        mock_datetime.datetime.now.return_value = now + datetime.timedelta(minutes=45)
+        for _ in range(3):
+            await device.on_timeout()
+        restart.assert_not_called()
+
+
+async def test_concurrent_timeouts_resubscribe_once() -> None:
+    """Test that timeouts arriving while the topic is being subscribed again don't repeat it."""
+    resubscribed = asyncio.Event()
+    calls = 0
+
+    async def slow_resubscribe() -> None:
+        nonlocal calls
+        calls += 1
+        await resubscribed.wait()
+
+    health_manager = HealthManager(restart=AsyncMock())
+    failing = DeviceHealthManager(health_manager, "failing", slow_resubscribe)
+    await DeviceHealthManager(health_manager, "working").on_success()
+
+    await failing.on_timeout()
+    await failing.on_timeout()
+    pending = [asyncio.create_task(failing.on_timeout()) for _ in range(3)]
+    await asyncio.sleep(0)
+    resubscribed.set()
+    await asyncio.gather(*pending)
+
+    assert calls == 1
+    assert [event["event"] for event in failing.diagnostic_data()["events"]] == ["resubscribe", "timeouts_started"]
+
+
+async def test_session_failure_restarts_without_resubscribing() -> None:
+    """Test that timeouts across devices restart the session straight away."""
+    restart = AsyncMock()
+    resubscribe = AsyncMock()
+    health_manager = HealthManager(restart=restart)
+    first = DeviceHealthManager(health_manager, "first", resubscribe)
+    second = DeviceHealthManager(health_manager, "second", resubscribe)
+
+    await first.on_timeout()
+    await second.on_timeout()
+    await first.on_timeout()
+
+    restart.assert_called_once()
+    resubscribe.assert_not_called()
+    for device in (first, second):
+        assert device.diagnostic_data()["events"][0]["cause"] == "several_devices"
 
 
 async def test_diagnostics_keep_only_recent_events() -> None:
@@ -322,8 +508,15 @@ async def test_device_cooldown_applies_without_successes_from_other_devices() ->
         restart.assert_called_once()
         restart.reset_mock()
 
-        # Past the session cooldown, but only this device is failing.
-        mock_datetime.datetime.now.return_value = now + datetime.timedelta(hours=1)
+        now += datetime.timedelta(minutes=31)
+        mock_datetime.datetime.now.return_value = now
+        for _ in range(3):
+            await failing.on_timeout()
+        restart.assert_called_once()
+        restart.reset_mock()
+
+        # Past the session cooldown, but only this device is failing and its own cooldown has grown.
+        mock_datetime.datetime.now.return_value = now + datetime.timedelta(minutes=45)
         for _ in range(3):
             await failing.on_timeout()
         restart.assert_not_called()

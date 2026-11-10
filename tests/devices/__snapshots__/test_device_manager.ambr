@@ -36,14 +36,11 @@
           'tuyaMigrated': False,
         }),
         'mqtt_health': dict({
-          'consecutive_timeouts': 0,
           'events': list([
           ]),
+          'failing_since': None,
           'last_success': None,
           'last_timeout': None,
-          'restarts_triggered': 0,
-          'session_last_restart': None,
-          'session_restarts': 0,
           'successes': 0,
           'timeouts': 0,
         }),

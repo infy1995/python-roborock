@@ -107,6 +107,14 @@ class MqttSession(ABC):
         """
 
     @abstractmethod
+    async def resubscribe(self, topic: str) -> None:
+        """Subscribe to an already subscribed topic again without reconnecting.
+
+        Errors are logged rather than raised. This is a no-op if the topic is
+        not subscribed or the session is not connected.
+        """
+
+    @abstractmethod
     async def restart(self) -> None:
         """Force the session to disconnect and reconnect."""
 
