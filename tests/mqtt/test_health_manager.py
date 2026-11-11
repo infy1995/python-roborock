@@ -10,6 +10,7 @@ import pytest
 from roborock.mqtt.health_manager import (
     MAX_DEVICE_EVENTS,
     MAX_DEVICE_RESTART_COOLDOWN,
+    TIMEOUT_WINDOW,
     DeviceHealthManager,
     HealthManager,
 )
@@ -30,23 +31,44 @@ async def test_health_manager_restart_called_after_timeouts() -> None:
     restart.assert_called_once()
 
 
-async def test_health_manager_success_resets_counter() -> None:
-    """Test that a successful message resets the timeout counter."""
+async def test_responses_in_between_do_not_hide_a_partial_failure() -> None:
+    """Test that timeouts interleaved with successful responses still restart the session."""
     restart = AsyncMock()
     health_manager = DeviceHealthManager(HealthManager(restart=restart), DEVICE_ID)
 
     await health_manager.on_timeout()
-    await health_manager.on_timeout()
-    restart.assert_not_called()
-
     await health_manager.on_success()
-
     await health_manager.on_timeout()
-    await health_manager.on_timeout()
+    await health_manager.on_success()
     restart.assert_not_called()
 
     await health_manager.on_timeout()
     restart.assert_called_once()
+    # The device kept timing out, so the responses in between are not recorded as a recovery.
+    assert [event["event"] for event in health_manager.diagnostic_data()["events"]] == [
+        "session_restart",
+        "timeouts_started",
+    ]
+
+
+async def test_old_timeouts_do_not_count() -> None:
+    """Test that only the timeouts within the time window restart the session."""
+    restart = AsyncMock()
+    health_manager = DeviceHealthManager(HealthManager(restart=restart), DEVICE_ID)
+
+    with patch("roborock.mqtt.health_manager.datetime") as mock_datetime:
+        now = datetime.datetime(2023, 1, 1, 12, 0, 0)
+        mock_datetime.datetime.now.return_value = now
+        await health_manager.on_timeout()
+        await health_manager.on_timeout()
+
+        mock_datetime.datetime.now.return_value = now + TIMEOUT_WINDOW
+        await health_manager.on_timeout()
+        await health_manager.on_timeout()
+        restart.assert_not_called()
+
+        await health_manager.on_timeout()
+        restart.assert_called_once()
 
 
 async def test_cooldown() -> None:
@@ -113,19 +135,17 @@ async def test_other_device_success_does_not_hide_failing_device() -> None:
     restart.assert_called_once()
 
 
-async def test_device_success_resets_only_its_own_counter() -> None:
-    """Test that a device needs consecutive timeouts of its own to restart the session."""
+async def test_device_needs_timeouts_of_its_own() -> None:
+    """Test that timeouts of other devices don't count towards a device's restart."""
     restart = AsyncMock()
     health_manager = HealthManager(restart=restart)
     device = DeviceHealthManager(health_manager, DEVICE_ID)
     other = DeviceHealthManager(health_manager, "other")
 
     await device.on_timeout()
-    await device.on_timeout()
     await device.on_success()
+    await other.on_timeout()
     await other.on_success()
-
-    await device.on_timeout()
     await device.on_timeout()
     restart.assert_not_called()
 
@@ -292,7 +312,11 @@ async def test_diagnostics_record_when_timeouts_start_and_recover() -> None:
         await device.on_timeout()
         await device.on_timeout()
 
-        recovered = start + datetime.timedelta(minutes=10)
+        # A response while the timeouts still count is not a recovery yet.
+        mock_datetime.datetime.now.return_value = start + datetime.timedelta(minutes=10)
+        await device.on_success()
+
+        recovered = start + TIMEOUT_WINDOW
         mock_datetime.datetime.now.return_value = recovered
         await device.on_success()
         await device.on_success()
@@ -301,6 +325,7 @@ async def test_diagnostics_record_when_timeouts_start_and_recover() -> None:
         {"time": recovered.isoformat(), "event": "recovered"},
         {"time": start.isoformat(), "event": "timeouts_started"},
     ]
+    assert device.diagnostic_data()["failing_since"] is None
 
 
 async def test_diagnostics_record_recovery_after_restart() -> None:
@@ -422,9 +447,14 @@ async def test_diagnostics_keep_only_recent_events() -> None:
     """Test that the event history of a device is bounded."""
     device = DeviceHealthManager(HealthManager(restart=AsyncMock()), DEVICE_ID)
 
-    for _ in range(MAX_DEVICE_EVENTS):
-        await device.on_timeout()
-        await device.on_success()
+    with patch("roborock.mqtt.health_manager.datetime") as mock_datetime:
+        now = datetime.datetime(2023, 1, 1, 12, 0, 0)
+        for _ in range(MAX_DEVICE_EVENTS):
+            mock_datetime.datetime.now.return_value = now
+            await device.on_timeout()
+            now += TIMEOUT_WINDOW
+            mock_datetime.datetime.now.return_value = now
+            await device.on_success()
 
     assert len(device.diagnostic_data()["events"]) == MAX_DEVICE_EVENTS
 
