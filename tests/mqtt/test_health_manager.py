@@ -51,6 +51,24 @@ async def test_responses_in_between_do_not_hide_a_partial_failure() -> None:
     ]
 
 
+async def test_timeouts_before_a_reconnect_do_not_count() -> None:
+    """Test that a new connection is not restarted because of the old connection's timeouts."""
+    restart = AsyncMock()
+    health_manager = HealthManager(restart=restart)
+    device = DeviceHealthManager(health_manager, DEVICE_ID)
+
+    await device.on_timeout()
+    await device.on_timeout()
+    health_manager.on_connected()
+
+    await device.on_timeout()
+    await device.on_timeout()
+    restart.assert_not_called()
+
+    await device.on_timeout()
+    restart.assert_called_once()
+
+
 async def test_old_timeouts_do_not_count() -> None:
     """Test that only the timeouts within the time window restart the session."""
     restart = AsyncMock()

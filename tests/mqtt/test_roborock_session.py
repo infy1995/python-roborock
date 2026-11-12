@@ -583,6 +583,55 @@ async def test_disconnect_waits_for_backoff(
             await session.close()
 
 
+async def test_reconnect_resets_health_timeouts(
+    mock_aenter_client: AsyncMock,
+    message_iterator: FakeAsyncIterator,
+    mqtt_client_lite: AsyncMock,
+) -> None:
+    """Test that timeouts counted before a reconnect don't restart the new connection."""
+    params = copy.deepcopy(FAKE_PARAMS)
+    params.diagnostics = Diagnostics()
+    session = await create_mqtt_session(params)
+    await session.subscribe("topic-1", Subscriber().append)
+    health_manager = session.health_manager
+
+    try:
+        await health_manager.on_timeout("device-1")
+        await health_manager.on_timeout("device-1")
+
+        # The connection drops and the session reconnects on its own.
+        message_iterator.loop = False
+        async with asyncio.timeout(1):
+            while mock_aenter_client.await_count < 2:
+                await asyncio.sleep(0.01)
+        message_iterator.loop = True
+
+        await health_manager.on_timeout("device-1")
+        assert "restart" not in params.diagnostics.as_dict()
+    finally:
+        await session.close()
+
+
+async def test_topics_are_subscribed_again_periodically(mqtt_client_lite: AsyncMock) -> None:
+    """Test that every active topic is unsubscribed and subscribed again at the interval."""
+    with patch("roborock.mqtt.roborock_session.RESUBSCRIBE_INTERVAL", datetime.timedelta(milliseconds=20)):
+        session = await create_mqtt_session(FAKE_PARAMS)
+        await session.subscribe("topic-1", Subscriber().append)
+        await session.subscribe("topic-2", Subscriber().append)
+        mqtt_client_lite.subscribe.reset_mock()
+
+        try:
+            async with asyncio.timeout(1):
+                while mqtt_client_lite.subscribe.await_count < 2:
+                    await asyncio.sleep(0.01)
+            mqtt_client_lite.unsubscribe.assert_any_await("topic-1")
+            mqtt_client_lite.unsubscribe.assert_any_await("topic-2")
+            mqtt_client_lite.subscribe.assert_any_await("topic-1")
+            mqtt_client_lite.subscribe.assert_any_await("topic-2")
+        finally:
+            await session.close()
+
+
 async def test_session_defers_reconnect_when_idle(
     mock_aenter_client: AsyncMock,
     message_iterator: FakeAsyncIterator,

@@ -98,6 +98,17 @@ class HealthManager:
         """Return the history of a device, creating it on first use."""
         return self._devices.setdefault(device_id, _DeviceHealth())
 
+    def on_connected(self) -> None:
+        """Forget the timeouts counted on a previous connection.
+
+        Timeouts on an old connection say nothing about a new one, whether the
+        session reconnected on its own or was restarted.
+        """
+        self._consecutive_timeouts = 0
+        self._timed_out_devices.clear()
+        for device in self._devices.values():
+            device.recent_timeouts.clear()
+
     async def on_success(self, device_id: str) -> None:
         """Record a successful communication event for a device."""
         self._consecutive_timeouts = 0

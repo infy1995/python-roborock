@@ -522,6 +522,9 @@ re-established) when:
   reset the count, because a failing connection may still deliver some of them.
 - **The session fails**: 3 requests in a row time out across more than one device.
 
+Only timeouts on the current connection count: every new connection, whether forced or after the
+session reconnected on its own, starts counting from zero.
+
 Restarts are paced so that a device that is really offline doesn't keep interrupting the others:
 
 - At most one restart every 30 minutes.

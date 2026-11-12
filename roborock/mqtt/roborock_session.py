@@ -35,6 +35,11 @@ MIN_BACKOFF_INTERVAL = datetime.timedelta(seconds=10)
 MAX_BACKOFF_INTERVAL = datetime.timedelta(hours=6)
 BACKOFF_MULTIPLIER = 1.5
 
+# Experiment: the broker stops routing a device's messages 3-4 hours into a connection.
+# Subscribe to every topic again before that, to find out whether the subscription's age
+# matters rather than the connection's.
+RESUBSCRIBE_INTERVAL = datetime.timedelta(hours=2, minutes=30)
+
 
 class MqttReasonCode:
     """MQTT Reason Codes used by Roborock devices.
@@ -214,15 +219,20 @@ class RoborockMqttSession(MqttSession):
                 async with self._mqtt_client(self._params) as client:
                     self._backoff = MIN_BACKOFF_INTERVAL
                     self._healthy = True
+                    self._health_manager.on_connected()
                     _LOGGER.info("MQTT Session connected.")
                     if start_future and not start_future.done():
                         start_future.set_result(None)
 
                     _LOGGER.debug("Processing MQTT messages")
-                    async for message in client.messages:
-                        _LOGGER.debug("Received message: %s", message)
-                        with self._diagnostics.timer("dispatch_message"):
-                            self._listeners(message.topic.value, message.payload)
+                    resubscribe_task = asyncio.create_task(self._resubscribe_periodically(client))
+                    try:
+                        async for message in client.messages:
+                            _LOGGER.debug("Received message: %s", message)
+                            with self._diagnostics.timer("dispatch_message"):
+                                self._listeners(message.topic.value, message.payload)
+                    finally:
+                        resubscribe_task.cancel()
         except MqttCodeError as err:
             self._diagnostics.increment(f"connect_failure:{err.rc}")
             if start_future and not start_future.done():
@@ -256,6 +266,23 @@ class RoborockMqttSession(MqttSession):
             else:
                 _LOGGER.exception("Uncaught error during MQTT session: %s", err)
             raise
+
+    async def _resubscribe_periodically(self, client: aiomqtt.Client) -> None:
+        """Unsubscribe and subscribe to every active topic again at a fixed interval."""
+        while True:
+            await asyncio.sleep(RESUBSCRIBE_INTERVAL.total_seconds())
+            async with self._client_lock:
+                topics = sorted(self._client_subscribed_topics)
+                _LOGGER.info(
+                    "Subscribing again to %d topics after %s on this connection", len(topics), RESUBSCRIBE_INTERVAL
+                )
+                self._diagnostics.increment("periodic_resubscribe")
+                for topic in topics:
+                    try:
+                        await client.unsubscribe(topic)
+                        await client.subscribe(topic)
+                    except MqttError as err:
+                        _LOGGER.warning("Error subscribing again to topic %s: %s", redact_topic_name(topic), err)
 
     @asynccontextmanager
     async def _mqtt_client(self, params: MqttParams) -> aiomqtt.Client:
