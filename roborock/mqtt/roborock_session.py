@@ -214,6 +214,7 @@ class RoborockMqttSession(MqttSession):
                 async with self._mqtt_client(self._params) as client:
                     self._backoff = MIN_BACKOFF_INTERVAL
                     self._healthy = True
+                    self._health_manager.on_connected()
                     _LOGGER.info("MQTT Session connected.")
                     if start_future and not start_future.done():
                         start_future.set_result(None)

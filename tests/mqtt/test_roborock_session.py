@@ -583,6 +583,35 @@ async def test_disconnect_waits_for_backoff(
             await session.close()
 
 
+async def test_reconnect_resets_health_timeouts(
+    mock_aenter_client: AsyncMock,
+    message_iterator: FakeAsyncIterator,
+    mqtt_client_lite: AsyncMock,
+) -> None:
+    """Test that timeouts counted before a reconnect don't restart the new connection."""
+    params = copy.deepcopy(FAKE_PARAMS)
+    params.diagnostics = Diagnostics()
+    session = await create_mqtt_session(params)
+    await session.subscribe("topic-1", Subscriber().append)
+    health_manager = session.health_manager
+
+    try:
+        await health_manager.on_timeout("device-1")
+        await health_manager.on_timeout("device-1")
+
+        # The connection drops and the session reconnects on its own.
+        message_iterator.loop = False
+        async with asyncio.timeout(1):
+            while mock_aenter_client.await_count < 2:
+                await asyncio.sleep(0.01)
+        message_iterator.loop = True
+
+        await health_manager.on_timeout("device-1")
+        assert "restart" not in params.diagnostics.as_dict()
+    finally:
+        await session.close()
+
+
 async def test_session_defers_reconnect_when_idle(
     mock_aenter_client: AsyncMock,
     message_iterator: FakeAsyncIterator,
