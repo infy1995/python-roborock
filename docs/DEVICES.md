@@ -537,7 +537,7 @@ for hours. A broken topic is then noticed when the map (only available over MQTT
 again, and the session is restarted after the first few map requests time out.
 
 Each device's diagnostics include an `mqtt_health` section: when it started failing, its last
-success and timeout, request counts, and the latest health events (newest first): `timeouts_started`,
+success and timeout, request counts, and the last 10 health events (newest first): `timeouts_started`,
 `session_restart` (with `cause`: `this_device`, `other_device` or `several_devices`) and `recovered`.
 B01 devices don't report their requests yet, so they have no `mqtt_health` section.
 

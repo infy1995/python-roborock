@@ -42,7 +42,7 @@ RESTART_COOLDOWN = datetime.timedelta(minutes=30)
 MAX_DEVICE_RESTART_COOLDOWN = datetime.timedelta(hours=6)
 
 # Number of health changes kept per device for diagnostics.
-MAX_DEVICE_EVENTS = 20
+MAX_DEVICE_EVENTS = 10
 
 
 @dataclass
