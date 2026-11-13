@@ -57,8 +57,6 @@ RECONNECT_MULTIPLIER = 1.5
 NETWORK_INFO_REFRESH_INTERVAL = datetime.timedelta(hours=12)
 # Interval to check that the local connection is healthy
 LOCAL_CONNECTION_CHECK_INTERVAL = datetime.timedelta(seconds=15)
-# Interval to check that a locally reachable device still answers over MQTT
-MQTT_PROBE_INTERVAL = datetime.timedelta(minutes=10)
 
 
 @dataclass(frozen=True)
@@ -236,7 +234,6 @@ class V1Channel(Channel):
         self._callback: Callable[[RoborockMessage], None] | None = None
         self._device_cache = device_cache
         self._reconnect_task: asyncio.Task[None] | None = None
-        self._mqtt_probe_task: asyncio.Task[None] | None = None
         self._last_network_info_refresh: datetime.datetime | None = None
         self._dps_listeners = CallbackList[dict[RoborockDataProtocol, Any]](self._logger)
 
@@ -375,8 +372,6 @@ class V1Channel(Channel):
             if self._reconnect_task is None:
                 loop = asyncio.get_running_loop()
                 self._reconnect_task = loop.create_task(self._background_reconnect())
-            if self._mqtt_probe_task is None:
-                self._mqtt_probe_task = asyncio.create_task(self._background_mqtt_probe())
 
             # We maintain an active MQTT subscription even when connected locally to receive
             # unsolicited status updates (DPS push messages) directly from the cloud.
@@ -416,9 +411,6 @@ class V1Channel(Channel):
         if self._reconnect_task:
             self._reconnect_task.cancel()
             self._reconnect_task = None
-        if self._mqtt_probe_task:
-            self._mqtt_probe_task.cancel()
-            self._mqtt_probe_task = None
         if self._mqtt_unsub:
             self._mqtt_unsub()
             self._mqtt_unsub = None
@@ -520,24 +512,6 @@ class V1Channel(Channel):
                 self._logger.debug("Background reconnect failed: %s", err)
             except Exception:
                 self._logger.exception("Unhandled exception in background reconnect task")
-
-    async def _background_mqtt_probe(self) -> None:
-        """Task to run in the background to detect a device that stopped answering over MQTT.
-
-        A device used over the local connection sends little over MQTT, so its
-        topic can stop delivering messages long before anything needs it. Probes
-        only run while the local connection shows the device is powered on and
-        the MQTT session is connected. The outcome is reported to the health
-        manager like any other MQTT request.
-        """
-        while True:
-            await asyncio.sleep(MQTT_PROBE_INTERVAL.total_seconds())
-            if not self.is_local_connected or not self.is_mqtt_connected:
-                continue
-            try:
-                await self.mqtt_rpc_channel.send_command(RoborockCommand.GET_NETWORK_INFO)
-            except RoborockException as err:
-                self._logger.debug("MQTT probe failed: %s", err)
 
     def _should_use_cache(self, local_connect_failures: int) -> bool:
         """Determine whether to use cached network info on retries.

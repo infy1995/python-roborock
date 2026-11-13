@@ -4,13 +4,11 @@ This test simulates communication across both the MQTT and local connections
 and failure modes, ensuring the V1Channel behaves correctly in various scenarios.
 """
 
-import asyncio
-import datetime
 import gzip
 import json
 import logging
 from collections.abc import Iterator
-from unittest.mock import AsyncMock, Mock, PropertyMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -321,102 +319,6 @@ async def test_v1_channel_subscribe_local_success(
     unsub()
     assert not mock_mqtt_channel.subscribers
     assert not mock_local_channel.subscribers
-
-
-@pytest.fixture(name="mqtt_probe")
-def setup_mqtt_probe() -> Iterator[AsyncMock]:
-    """Run the MQTT probe quickly and capture the commands it sends."""
-    send_command = AsyncMock()
-    with patch("roborock.devices.rpc.v1_channel.MQTT_PROBE_INTERVAL", datetime.timedelta(milliseconds=1)):
-        yield send_command
-
-
-async def _run_mqtt_probe(send_command: AsyncMock) -> None:
-    """Give the background probe time to run against a fake MQTT RPC channel."""
-    with patch.object(
-        V1Channel, "mqtt_rpc_channel", new_callable=PropertyMock, return_value=Mock(send_command=send_command)
-    ):
-        await asyncio.sleep(0.05)
-
-
-async def test_v1_channel_mqtt_probe_while_local_connected(
-    v1_channel: V1Channel,
-    mock_mqtt_channel: FakeChannel,
-    mqtt_probe: AsyncMock,
-) -> None:
-    """Test that a device reachable locally is also checked over MQTT."""
-    mock_mqtt_channel.response_queue.append(TEST_NETWORK_INFO_RESPONSE)
-    unsub = await v1_channel.subscribe(Mock())
-
-    await _run_mqtt_probe(mqtt_probe)
-
-    mqtt_probe.assert_awaited_with(RoborockCommand.GET_NETWORK_INFO)
-    unsub()
-
-
-async def test_v1_channel_mqtt_probe_skipped_when_device_not_local(
-    v1_channel: V1Channel,
-    mock_mqtt_channel: FakeChannel,
-    mock_local_channel: FakeChannel,
-    mqtt_probe: AsyncMock,
-) -> None:
-    """Test that a device that may be powered off is not probed."""
-    mock_mqtt_channel.response_queue.append(TEST_NETWORK_INFO_RESPONSE)
-    unsub = await v1_channel.subscribe(Mock())
-    await asyncio.sleep(0)  # Let the reconnect task start its wait so it doesn't reconnect at once
-    mock_local_channel.close()
-
-    await _run_mqtt_probe(mqtt_probe)
-
-    mqtt_probe.assert_not_awaited()
-    unsub()
-
-
-async def test_v1_channel_mqtt_probe_skipped_when_mqtt_disconnected(
-    v1_channel: V1Channel,
-    mock_mqtt_channel: FakeChannel,
-    mqtt_probe: AsyncMock,
-) -> None:
-    """Test that nothing is probed while the MQTT session is down."""
-    mock_mqtt_channel.response_queue.append(TEST_NETWORK_INFO_RESPONSE)
-    unsub = await v1_channel.subscribe(Mock())
-    mock_mqtt_channel.close()
-
-    await _run_mqtt_probe(mqtt_probe)
-
-    mqtt_probe.assert_not_awaited()
-    unsub()
-
-
-async def test_v1_channel_mqtt_probe_continues_after_failure(
-    v1_channel: V1Channel,
-    mock_mqtt_channel: FakeChannel,
-    mqtt_probe: AsyncMock,
-) -> None:
-    """Test that a failed probe does not stop later probes."""
-    mock_mqtt_channel.response_queue.append(TEST_NETWORK_INFO_RESPONSE)
-    unsub = await v1_channel.subscribe(Mock())
-    mqtt_probe.side_effect = RoborockException("Command timed out")
-
-    await _run_mqtt_probe(mqtt_probe)
-
-    assert mqtt_probe.await_count > 1
-    unsub()
-
-
-async def test_v1_channel_mqtt_probe_stops_on_unsubscribe(
-    v1_channel: V1Channel,
-    mock_mqtt_channel: FakeChannel,
-    mqtt_probe: AsyncMock,
-) -> None:
-    """Test that unsubscribing stops the probe."""
-    mock_mqtt_channel.response_queue.append(TEST_NETWORK_INFO_RESPONSE)
-    unsub = await v1_channel.subscribe(Mock())
-    unsub()
-
-    await _run_mqtt_probe(mqtt_probe)
-
-    mqtt_probe.assert_not_awaited()
 
 
 async def test_v1_channel_subscribe_already_connected_error(v1_channel: V1Channel, mock_mqtt_channel: Mock) -> None:

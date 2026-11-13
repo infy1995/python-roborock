@@ -496,7 +496,7 @@ For each V1 command:
 | **Channel Class** | `V1Channel` | `MqttChannel` directly |
 | **RPC Abstraction** | `RpcChannel` with strategies | Helper functions |
 | **Strategy Pattern** | ✅ Multi-strategy (Local → MQTT) | ❌ Direct MQTT only |
-| **MQTT Health Reporting** | ✅ MQTT requests, plus a periodic probe | ✅ A01 requests; ❌ B01 not yet |
+| **MQTT Health Reporting** | ✅ MQTT requests | ✅ A01 requests; ❌ B01 not yet |
 | **Code Location** | `v1_channel.py` | `a01_channel.py`, `b01_q7_channel.py` |
 
 #### Local Connection Recovery (V1 Only)
@@ -522,6 +522,9 @@ re-established) when:
   reset the count, because a failing connection may still deliver some of them.
 - **The session fails**: 3 requests in a row time out across more than one device.
 
+Only timeouts on the current connection count: every new connection, whether forced or after the
+session reconnected on its own, starts counting from zero.
+
 Restarts are paced so that a device that is really offline doesn't keep interrupting the others:
 
 - At most one restart every 30 minutes.
@@ -530,10 +533,8 @@ Restarts are paced so that a device that is really offline doesn't keep interrup
 - A forced restart reconnects right away; other disconnects keep the exponential backoff.
 
 V1 devices answer most requests over the local connection, so their MQTT topic may carry no traffic
-for hours (the map is only available over MQTT). While both connections are up, `V1Channel` sends
-`GET_NETWORK_INFO` over MQTT every 10 minutes so that a broken topic is found and repaired before the
-map is needed. The probe is skipped while the local connection is down, since the device may simply
-be offline.
+for hours. A broken topic is then noticed when the map (only available over MQTT) is requested
+again, and the session is restarted after the first few map requests time out.
 
 Each device's diagnostics include an `mqtt_health` section: when it started failing, its last
 success and timeout, request counts, and the latest health events (newest first): `timeouts_started`,
