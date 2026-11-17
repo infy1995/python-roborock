@@ -3,7 +3,7 @@
 import asyncio
 import warnings
 from typing import cast
-from unittest.mock import AsyncMock, call
+from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 
@@ -14,6 +14,7 @@ from roborock import (
     WaterModes,
     get_cleaning_mode_parameters,
     get_current_cleaning_mode,
+    get_water_slide_mode_name,
     resolve_cleaning_mode,
 )
 from roborock.data import SHORT_MODEL_TO_ENUM, HomeDataDevice, RoborockProductNickname
@@ -1126,6 +1127,52 @@ def test_update_from_dps_partial(status_trait: StatusTrait) -> None:
     assert status_trait.state == RoborockStateCode.charging  # Unchanged
 
 
+@pytest.mark.parametrize("pushed", [201, 202, 203])
+def test_update_from_dps_water_slide_ignores_legacy_levels(pushed: int) -> None:
+    """Legacy water level codes pushed to a water-slide device do not overwrite the slider value."""
+    status_trait = _create_cleaning_mode_status_trait(is_water_slide_mode_supported=True)
+    status_trait.water_box_mode = 235
+    listener = Mock()
+    status_trait.add_update_listener(listener)
+
+    status_trait.update_from_dps({RoborockDataProtocol.WATER_BOX_MODE: pushed})
+
+    assert status_trait.water_box_mode == 235
+    assert status_trait.water_mode_name == get_water_slide_mode_name(235)
+    listener.assert_not_called()
+
+
+@pytest.mark.parametrize("pushed", [200, 209, 225, 245])
+def test_update_from_dps_water_slide_keeps_other_water_codes(pushed: int) -> None:
+    """Slider codes pushed to a water-slide device are applied."""
+    status_trait = _create_cleaning_mode_status_trait(is_water_slide_mode_supported=True)
+    status_trait.water_box_mode = 235
+
+    status_trait.update_from_dps({RoborockDataProtocol.WATER_BOX_MODE: pushed})
+
+    assert status_trait.water_box_mode == pushed
+
+
+def test_update_from_dps_water_slide_still_applies_other_fields() -> None:
+    """Ignoring a legacy water level does not drop other fields in the same push."""
+    status_trait = _create_cleaning_mode_status_trait(is_water_slide_mode_supported=True)
+    status_trait.water_box_mode = 235
+
+    status_trait.update_from_dps({RoborockDataProtocol.FAN_POWER: 101, RoborockDataProtocol.WATER_BOX_MODE: 202})
+
+    assert status_trait.fan_power == 101
+    assert status_trait.water_box_mode == 235
+
+
+def test_update_from_dps_without_water_slide_keeps_legacy_levels() -> None:
+    """Devices without the water slider use the legacy level codes."""
+    status_trait = _create_cleaning_mode_status_trait(is_water_slide_mode_supported=False)
+
+    status_trait.update_from_dps({RoborockDataProtocol.WATER_BOX_MODE: 202})
+
+    assert status_trait.water_box_mode == 202
+
+
 def test_update_listener(status_trait: StatusTrait) -> None:
     """Test that update listeners receive notifications."""
     event = asyncio.Event()
@@ -1607,3 +1654,46 @@ def test_mop_route_special_values_need_shake(codes: tuple[int, int, int]) -> Non
     assert trait.mop_route_options
     assert trait.mop_route_display_options == []
     assert trait.water_mode_display_options != []
+
+
+async def test_refresh_and_notify_notifies_when_values_changed(
+    status_trait: StatusTrait, mock_rpc_channel: AsyncMock
+) -> None:
+    """Listeners hear about water and mop route values that changed in the read-back."""
+    status_trait.water_box_mode = 202
+    status_trait.mop_mode = 300
+    listener = Mock()
+    status_trait.add_update_listener(listener)
+    mock_rpc_channel.send_command.return_value = [{**STATUS, "water_box_mode": 203, "mop_mode": 301}]
+
+    await status_trait.refresh_and_notify()
+
+    assert status_trait.water_box_mode == 203
+    assert status_trait.mop_mode == 301
+    listener.assert_called_once_with()
+
+
+async def test_refresh_and_notify_silent_when_nothing_changed(
+    status_trait: StatusTrait, mock_rpc_channel: AsyncMock
+) -> None:
+    """Listeners are not called when the read-back matches the current state."""
+    mock_rpc_channel.send_command.return_value = [STATUS]
+    await status_trait.refresh()
+    listener = Mock()
+    status_trait.add_update_listener(listener)
+
+    await status_trait.refresh_and_notify()
+
+    listener.assert_not_called()
+
+
+async def test_refresh_and_notify_propagates_exception(status_trait: StatusTrait, mock_rpc_channel: AsyncMock) -> None:
+    """Errors from the read-back reach the caller and do not notify."""
+    listener = Mock()
+    status_trait.add_update_listener(listener)
+    mock_rpc_channel.send_command.side_effect = RoborockException("boom")
+
+    with pytest.raises(RoborockException):
+        await status_trait.refresh_and_notify()
+
+    listener.assert_not_called()

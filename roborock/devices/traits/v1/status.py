@@ -40,6 +40,16 @@ _LOGGER = logging.getLogger(__name__)
 _DPS_CONVERTER = DpsDataConverter.from_dataclass(StatusV2)
 
 
+_LEGACY_WATER_LEVEL_CODES = frozenset({WaterModes.LOW.code, WaterModes.MEDIUM.code, WaterModes.HIGH.code})
+
+
+def _drop_legacy_water_levels(decoded_dps: dict[RoborockDataProtocol, Any]) -> dict[RoborockDataProtocol, Any]:
+    """Return the pushed data without a legacy water level (low, medium or high)."""
+    if decoded_dps.get(RoborockDataProtocol.WATER_BOX_MODE) not in _LEGACY_WATER_LEVEL_CODES:
+        return decoded_dps
+    return {key: value for key, value in decoded_dps.items() if key != RoborockDataProtocol.WATER_BOX_MODE}
+
+
 class StatusTrait(StatusV2, common.V1TraitMixin, TraitUpdateListener):
     """Trait for managing the status of Roborock devices.
 
@@ -267,5 +277,16 @@ class StatusTrait(StatusV2, common.V1TraitMixin, TraitUpdateListener):
         This handles unsolicited status updates pushed by the device
         via RoborockDataProtocol codes (e.g. STATE=121, BATTERY=122).
         """
+        # Water-slide devices push legacy level codes (201-203) while get_status
+        # returns slider codes, so a pushed legacy level would overwrite the real value.
+        if self._device_features_trait.is_water_slide_mode_supported:
+            decoded_dps = _drop_legacy_water_levels(decoded_dps)
         if _DPS_CONVERTER.update_from_dps(self, decoded_dps):
+            self._notify_update()
+
+    async def refresh_and_notify(self) -> None:
+        """Refresh the status and notify update listeners if any value changed."""
+        before = self.as_dict()
+        await self.refresh()
+        if self.as_dict() != before:
             self._notify_update()
