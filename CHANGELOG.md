@@ -2,6 +2,159 @@
 
 <!-- version list -->
 
+## v7.26.1 (2026-11-22)
+
+### Bug Fixes
+
+- Wait for device readiness in reconnect test
+  ([#1071](https://github.com/Python-roborock/python-roborock/pull/1071),
+  [`223d18f`](https://github.com/Python-roborock/python-roborock/commit/223d18fff0478ca3f67c564421a6812902970417))
+
+- **v1**: Aggregate multi-phase cleaning records
+  ([#1058](https://github.com/Python-roborock/python-roborock/pull/1058),
+  [`4f8ca86`](https://github.com/Python-roborock/python-roborock/commit/4f8ca86839fe09a78421750db742378190f406df))
+
+- **v1**: Decode unrecognized error and status codes as unknown
+  ([#1057](https://github.com/Python-roborock/python-roborock/pull/1057),
+  [`2527d9a`](https://github.com/Python-roborock/python-roborock/commit/2527d9a979876f0474c65d062a6046f02b064c25))
+
+- **v1**: Report empty trait list replies as parsing errors
+  ([#1056](https://github.com/Python-roborock/python-roborock/pull/1056),
+  [`85d7514`](https://github.com/Python-roborock/python-roborock/commit/85d75144ec225f1284b408be44827c4e23b54c9d))
+
+- **v1**: Serialize the last clean record of the clean summary
+  ([#1059](https://github.com/Python-roborock/python-roborock/pull/1059),
+  [`bf5b6f2`](https://github.com/Python-roborock/python-roborock/commit/bf5b6f28e31a6d1234f29831fd12fb9e7a775ead))
+
+- **v1**: Update wash towel mode after setting it
+  ([#1060](https://github.com/Python-roborock/python-roborock/pull/1060),
+  [`e1220ee`](https://github.com/Python-roborock/python-roborock/commit/e1220eec4e38ed28c6ed3c893f9a5065af21e1ed))
+
+
+## v7.26.0 (2026-11-22)
+
+### Bug Fixes
+
+- Redact private data in device diagnostics
+  ([#1026](https://github.com/Python-roborock/python-roborock/pull/1026),
+  [`02b84cf`](https://github.com/Python-roborock/python-roborock/commit/02b84cf65a491e6036ab4dea7db2583692ccaf3b))
+
+- Simplify Q10 room cleaning state and commands
+  ([#935](https://github.com/Python-roborock/python-roborock/pull/935),
+  [`135b43a`](https://github.com/Python-roborock/python-roborock/commit/135b43a5e7e09c515e63ca440f108a9f52b7d51e))
+
+- Use DPS conversion for Q10 room settings
+  ([#935](https://github.com/Python-roborock/python-roborock/pull/935),
+  [`135b43a`](https://github.com/Python-roborock/python-roborock/commit/135b43a5e7e09c515e63ca440f108a9f52b7d51e))
+
+### Chores
+
+- Add Qrevo S Pro device data
+  ([#1052](https://github.com/Python-roborock/python-roborock/pull/1052),
+  [`71fde3b`](https://github.com/Python-roborock/python-roborock/commit/71fde3bc2983ad1722deb671162a35866c407074))
+
+### Features
+
+- Add Q10 customized cleaning controls
+  ([#935](https://github.com/Python-roborock/python-roborock/pull/935),
+  [`135b43a`](https://github.com/Python-roborock/python-roborock/commit/135b43a5e7e09c515e63ca440f108a9f52b7d51e))
+
+### Refactoring
+
+- Decode A01 JSON data point values when they arrive
+  ([#1026](https://github.com/Python-roborock/python-roborock/pull/1026),
+  [`02b84cf`](https://github.com/Python-roborock/python-roborock/commit/02b84cf65a491e6036ab4dea7db2583692ccaf3b))
+
+- Decode JSON strings before redacting diagnostics
+  ([#1026](https://github.com/Python-roborock/python-roborock/pull/1026),
+  [`02b84cf`](https://github.com/Python-roborock/python-roborock/commit/02b84cf65a491e6036ab4dea7db2583692ccaf3b))
+
+- Tidy A01 decoding follow-ups
+  ([#1026](https://github.com/Python-roborock/python-roborock/pull/1026),
+  [`02b84cf`](https://github.com/Python-roborock/python-roborock/commit/02b84cf65a491e6036ab4dea7db2583692ccaf3b))
+
+
+## v7.25.0 (2026-11-21)
+
+### Features
+
+- Add Q7 zone cleaning ([#1038](https://github.com/Python-roborock/python-roborock/pull/1038),
+  [`e9d8b34`](https://github.com/Python-roborock/python-roborock/commit/e9d8b34f9d754420695c0432f1c5bb444319d0d3))
+
+
+## v7.24.0 (2026-11-21)
+
+### Features
+
+- **map**: Plan V1 dynamic element page updates
+  ([#1010](https://github.com/Python-roborock/python-roborock/pull/1010),
+  [`769f35f`](https://github.com/Python-roborock/python-roborock/commit/769f35f60bb6bc2b4746cf46efd29994acfdcb29))
+
+
+## v7.23.2 (2026-11-16)
+
+### Bug Fixes
+
+- **b01**: Isolate Q7 map response assemblers per subscription
+  ([#1051](https://github.com/Python-roborock/python-roborock/pull/1051),
+  [`251a1c4`](https://github.com/Python-roborock/python-roborock/commit/251a1c425b3ca7c3c24f87296d58cbb3380f035b))
+
+### Chores
+
+- Add Qrevo 2 Pro device data
+  ([#1028](https://github.com/Python-roborock/python-roborock/pull/1028),
+  [`f4b4e4e`](https://github.com/Python-roborock/python-roborock/commit/f4b4e4e48b198688713b1156e8c08a71dd487e67))
+
+- Add Saros 10R device info ([#1031](https://github.com/Python-roborock/python-roborock/pull/1031),
+  [`c245569`](https://github.com/Python-roborock/python-roborock/commit/c2455690698cd0774aa0ccac2f543e681e2c77c5))
+
+### Refactoring
+
+- **map**: Consolidate Q10 render config and grid constants
+  ([#1011](https://github.com/Python-roborock/python-roborock/pull/1011),
+  [`916e5e8`](https://github.com/Python-roborock/python-roborock/commit/916e5e8b3473bb939be4f852124b2733a4154811))
+
+
+## v7.23.1 (2026-11-15)
+
+### Bug Fixes
+
+- Correct unknown model families in device catalogue
+  ([#1029](https://github.com/Python-roborock/python-roborock/pull/1029),
+  [`fe38922`](https://github.com/Python-roborock/python-roborock/commit/fe38922a0b98635398ee7879564f3dc5cc44f8ba))
+
+- Report unknown product families in device info
+  ([#1029](https://github.com/Python-roborock/python-roborock/pull/1029),
+  [`fe38922`](https://github.com/Python-roborock/python-roborock/commit/fe38922a0b98635398ee7879564f3dc5cc44f8ba))
+
+
+## v7.23.0 (2026-11-15)
+
+### Features
+
+- **camera**: Expose V1 camera signaling commands
+  ([#1023](https://github.com/Python-roborock/python-roborock/pull/1023),
+  [`b77c102`](https://github.com/Python-roborock/python-roborock/commit/b77c1026d54b99d338f27dd611fb2915612ea97f))
+
+
+## v7.22.2 (2026-11-15)
+
+### Bug Fixes
+
+- **b01**: Reassemble fragmented B01/Q7 live map responses
+  ([#1048](https://github.com/Python-roborock/python-roborock/pull/1048),
+  [`1fd6b5e`](https://github.com/Python-roborock/python-roborock/commit/1fd6b5efdf071ace9738866b18e2343c2beb0bee))
+
+
+## v7.22.1 (2026-11-14)
+
+### Bug Fixes
+
+- Wrap empty cleaning record responses as parsing errors
+  ([#1034](https://github.com/Python-roborock/python-roborock/pull/1034),
+  [`590ba8c`](https://github.com/Python-roborock/python-roborock/commit/590ba8cc0e94350e3c2a12c28ab26d50730e897b))
+
+
 ## v7.22.0 (2026-11-09)
 
 ### Bug Fixes
